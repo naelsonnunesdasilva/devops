@@ -1,0 +1,77 @@
+name: CI-CD
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  CI:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout da base de código
+        uses: actions/checkout@v3.5.3
+      - name: Autenticação no Docker Hub
+        uses: docker/login-action@v2.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USR }}
+          password: ${{ secrets.DOCKERHUB_PWD }}
+      - name: Construindo a imagem do worker
+        uses: docker/build-push-action@v4.1.1
+        with:
+          context: ./home-broker/01-worker
+          file: ./home-broker/01-worker/Dockerfile
+          push: true
+          tags: |
+            fabricioveronez/trader-worker:${{github.run_number}}
+            fabricioveronez/trader-worker:latest
+      - name: Construindo a imagem do api
+        uses: docker/build-push-action@v4.1.1
+        with:
+          context: ./home-broker/02-api
+          file: ./home-broker/02-api/Dockerfile
+          push: true
+          tags: |
+            fabricioveronez/trader-api:${{github.run_number}}
+            fabricioveronez/trader-api:latest
+      - name: Construindo a imagem do frontend
+        uses: docker/build-push-action@v4.1.1
+        with:
+          context: ./home-broker/03-frontend
+          file: ./home-broker/03-frontend/Dockerfile
+          push: true
+          tags: |
+            fabricioveronez/trader-web:${{github.run_number}}
+            fabricioveronez/trader-web:latest
+          build-args: |
+            NEXT_PUBLIC_NEST_URL=a926f72ab200a45d3b0c784566538857-290598195.us-east-1.elb.amazonaws.com
+            NEXT_PUBLIC_NEST_URL_API=ae1eb37d103244f958a85914e1b0205f-751910973.us-east-1.elb.amazonaws.com
+          
+  CD:
+    runs-on: ubuntu-latest
+    needs: [CI]
+    steps: 
+      - name: Checkout da base de código
+        uses: actions/checkout@v3.5.3
+      - name: Configurar as credenciais de acesso
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - name: Configuração do Kubeconfig
+        shell: bash
+        run: |
+          aws eks update-kubeconfig --name imersao-eks --region us-east-1
+      - name: Deploy no cluster Kubernetes
+        uses: Azure/k8s-deploy@v4.9
+        with:
+          manifests: |
+            home-broker/04-k8s-deploy/02-worker/deployment.yaml
+            home-broker/04-k8s-deploy/03-api/deployment.yaml
+            home-broker/04-k8s-deploy/04-frontend/deployment.yaml
+          images: |
+            fabricioveronez/trader-web:${{github.run_number}}
+            fabricioveronez/trader-api:${{github.run_number}}
+            fabricioveronez/trader-worker:${{github.run_number}}
+    
